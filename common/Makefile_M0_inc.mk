@@ -25,7 +25,7 @@
 #
 # derived primarily from Makefiles in libopencm3
 
-AIRSPY_OPTS = -DLPC43XX -DLPC43XX_M0 -DCORE_M0 -D__CORTEX_M=0
+AIRSPY_OPTS = -DLPC43XX -DLPC43XX_M0 -DCORE_M0 -D__CORTEX_M=0 -DOPTIM_SET_MUX
 
 LDSCRIPT ?= ../common/LPC4370_M0_ram_only.ld
 

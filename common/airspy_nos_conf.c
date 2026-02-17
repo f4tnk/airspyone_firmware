@@ -102,15 +102,15 @@ airspy_nos_conf_t __attribute__ ((section(".nocopy_data"))) airspy_nos_conf =
       100000000, /* Default Freq 100Mhz */
       {
         /* 05 */ 0x90, // LNA manual gain mode, init to 0
-        /* 06 */ 0x80,
-        /* 07 */ 0x60,
+        /* 06 */ 0xA0, // F4TNK: FILT_GAIN=1 (+3dB filter gain for weak LEO sat signals)
+        /* 07 */ 0x40, // F4TNK: PW0_MIX=0 (max mixer current, lower noise figure for weak signals)
         /* 08 */ 0x80, // Image Gain Adjustment
-        /* 09 */ 0x40, // Image Phase Adjustment
+        /* 09 */ 0x00, // F4TNK: PW1_IFFILT=0 (high current IF filter, lower noise for narrowband LEO)
         /* 0A */ 0xA8, // Channel filter [0..3]: 0 = widest, f = narrowest - Optimal. Don't touch!
         /* 0B */ 0x0F, // High pass filter - Optimal. Don't touch!
         /* 0C */ 0x40, // VGA control by code, init at 0
-        /* 0D */ 0x63, // LNA AGC settings: [0..3]: Lower threshold; [4..7]: High threshold
-        /* 0E */ 0x75,
+        /* 0D */ 0x75, // F4TNK: LNA AGC thresholds raised (VTHH=7,VTHL=5) for weak LEO sat signals
+        /* 0E */ 0x85, // F4TNK: Mixer AGC VTH_H=8 (raised threshold, more gain before mixer AGC reduces gain)
         /* 0F */ 0xF8, // Filter Widest, LDO_5V OFF, clk out OFF,
         /* 10 */ 0x7C,
         /* 11 */ 0x42,
@@ -124,9 +124,9 @@ airspy_nos_conf_t __attribute__ ((section(".nocopy_data"))) airspy_nos_conf =
         /* 19 */ 0xCC,
         /* 1A */ 0x60,
         /* 1B */ 0x00,
-        /* 1C */ 0x54,
-        /* 1D */ 0xAE,
-        /* 1E */ 0x0A,
+        /* 1C */ 0x24, // F4TNK: MIXER_TOP=2 (higher TOP, more gain before mixer compression)
+        /* 1D */ 0x8E, // F4TNK: LNA_TOP=1 (higher gain before AGC kicks in, optimal for weak signals)
+        /* 1E */ 0x4A, // F4TNK: FILTER_EXT=1 (CRITICAL: enable IF filter extension for weak signals!)
         /* 1F */ 0xC0
       },
       0 /* uint16_t padding */
@@ -300,7 +300,7 @@ airspy_nos_conf_t __attribute__ ((section(".nocopy_data"))) airspy_nos_conf =
       { 
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 0 - 9
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 10 - 19
-        0x00, 0x00, 0x00, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 20 - 29
+        0x00, 0x00, 0x00, 0x6F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 20 - 29 // F4TNK: CLK7 reg23=0x6F (drive 8mA for cleaner ADC clock)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x0E, 0x00, 0x00, // 30 - 39
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 40 - 49
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 50 - 59
