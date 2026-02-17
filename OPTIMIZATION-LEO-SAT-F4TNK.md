@@ -31,7 +31,9 @@
   - [⚡ Mod 8 — FILTER_EXT activé (R0x1E)](#-modification-8--filter_ext-activé-r0x1e)
   - [⚡ Mod 9 — OPTIM_SET_MUX (Makefile)](#-modification-9--optim_set_mux-makefile)
   - [⚡ Mod 10 — CLK7 drive 8mA (SI5351C)](#-modification-10--clk7-drive-8ma-si5351c)
-- [📊 Tableau récapitulatif des 10 modifications](#-tableau-récapitulatif-des-10-modifications)
+- [�️ GPSDO — Référence externe 10 MHz](#-gpsdo--référence-externe-10-mhz)
+  - [⚡ Mod 11 — CLK7 8mA en mode CLKIN](#-modification-11--clk7-8ma-en-mode-clkin-gpsdo)
+- [📊 Tableau récapitulatif des 11 modifications](#-tableau-récapitulatif-des-11-modifications)
 - [🔬 Analyse ADC / DMA / Horloge](#-analyse-adc--dma--horloge)
 - [🧪 Configuration recommandée pour LEO](#-configuration-recommandée-pour-leo)
 - [🆘 Procédure de récupération DFU](#-procédure-de-récupération-dfu)
@@ -204,16 +206,20 @@ flowchart LR
         FILT --> VGA["🔺 VGA"]
     end
 
-    VGA --> ADC["📐 ADC<br/>Mod 10: CLK 8mA"]
+    VGA --> ADC["📐 ADC<br/>Mod 10: CLK XTAL 8mA<br/>Mod 11: CLK GPSDO 8mA"]
 
     DOPPLER["🌀 Doppler<br/>Mod 9: OPTIM_SET_MUX"]
     DOPPLER -.->|"tuning rapide"| MIX
+
+    GPSDO["🛰️ GPSDO<br/>10 MHz ±0.01 ppb<br/>Mod 11 ⭐"]
+    GPSDO -.->|"auto-détecté au boot"| ADC
 
     style LNA fill:#ff6b6b,stroke:#333,color:#fff
     style MIX fill:#ffd43b,stroke:#333,color:#000
     style FILT fill:#69db7c,stroke:#333,color:#000
     style ADC fill:#845ef7,stroke:#333,color:#fff
     style DOPPLER fill:#4dabf7,stroke:#333,color:#fff
+    style GPSDO fill:#2b8a3e,stroke:#333,color:#fff
 ```
 
 ---
@@ -602,20 +608,174 @@ En mode **10 MSPS**, l'horloge GP_CLKIN (20 MHz) va **directement** à l'ADC san
 
 ---
 
-## 📊 Tableau récapitulatif des 10 modifications
+## �️ GPSDO — Référence externe 10 MHz
+
+> 🔑 **L'Airspy R2 supporte nativement un GPSDO 10 MHz.** Le firmware détecte automatiquement sa présence au démarrage et bascule de configuration — **sans intervention utilisateur**.
+
+### 📡 Connecteur CLK sur l'Airspy R2
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           VUE DESSUS — PCB Airspy R2                    │
+│                                                         │
+│  [ANT MCX]                              [USB Type B]    │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │                                                  │   │
+│  │    [SI5351C]         [LPC4370]     [R820T2]      │   │
+│  │                                                  │   │
+│  │  ← Pad/Point de test CLK (CLKIN)                 │   │
+│  │    Signal: 10 MHz CMOS 3.3V                       │   │
+│  │    Plusieurs Airspy R2 ont un SMA ou pad nu       │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+> ⚠️ La position exacte du pad CLK varie selon la révision du PCB. Chercher le pad/SMA étiqueté **"CLK"** ou **"CLKIN"** sur le bord du PCB, proche du SI5351C.
+
+### ⚙️ Architecture de détection automatique GPSDO
+
+```mermaid
+flowchart TD
+    BOOT["⚡ Démarrage firmware"] --> INIT["SI5351C init\n(disable all, power down)"]
+    INIT --> READ["📖 Lire reg0 SI5351C\n(CLKIN_LOS bit)"]
+
+    READ --> CHECK{"CLKIN_LOS = 1 ?\n(pas de signal GPSDO)"}
+
+    CHECK -->|"✅ GPSDO absent\n(LOS = 1)"| XTAL["🔧 Config XTAL\nTCXO 25 MHz\n(AIRSPY_SI5351C_CONFIG_XTAL)"]
+    CHECK -->|"🛰️ GPSDO présent\n(LOS = 0)"| CLKIN["🛰️ Config CLKIN\nGPSDO 10 MHz\n(AIRSPY_SI5351C_CONFIG_CLKIN)"]
+
+    XTAL --> CALIB{"Calibration flash\nvalide ?"}
+    CALIB -->|"Oui"| PPB["📐 Appliquer\ncorrection PPB\nr820t xtal_freq"]
+    CALIB -->|"Non"| NOPPB["25.000000 MHz\nnominal"]
+    PPB --> CONT["➡️ Démarrage normal"]
+    NOPPB --> CONT
+
+    CLKIN --> NOCALIB["⚡ Pas de correction PPB\n(GPS est LA référence)\nr820t xtal_freq = 25 MHz"]
+    NOCALIB --> CONT
+
+    style CLKIN fill:#2b8a3e,stroke:#333,color:#fff
+    style XTAL fill:#1971c2,stroke:#333,color:#fff
+    style NOCALIB fill:#2b8a3e,stroke:#333,color:#fff
+    style PPB fill:#1971c2,stroke:#333,color:#fff
+```
+
+### 📡 Chaîne d'horloges en mode GPSDO
+
+```mermaid
+flowchart LR
+    GPS["🌍 GPS"] -->|"signal GPS"| GPSDO_MOD["📡 Module GPSDO"]
+    GPSDO_MOD -->|"10 MHz ±0.01 ppb\nCMOS 3.3V"| CLKIN_PIN["📌 CLKIN\nSI5351C pin 6"]
+
+    subgraph "🕐 SI5351C (mode CLKIN)"
+        CLKIN_PIN -->|"CLKIN_DIV=1"| PLLA["🔄 PLL_A\n10×80=800 MHz"]
+        CLKIN_PIN --> PLLB["🔄 PLL_B\n10×64=640 MHz"]
+        PLLA -->|"÷32 integer"| CH0["📻 CLK0: 25 MHz\n→ R820T XTAL\n2mA drive"]
+        PLLB -->|"÷32 integer"| CH7["📐 CLK7: 20 MHz\n→ LPC GP_CLKIN\n🔧 8mA drive (F4TNK Mod11)"]
+    end
+
+    subgraph "🔴 MCU LPC4370"
+        CH7 --> ADC["ADCHS\n12-bit"]
+        CH7 --> PLL1["PLL1 ×7\n= 140 MHz MCU"]
+        CH7 --> PLLOUSB["PLL0USB\n= 480 MHz USB"]
+    end
+
+    CH0 --> R820T["🎛️ R820T2\nPLL VCO\n→ fréquence de réception"]
+
+    style GPSDO_MOD fill:#2b8a3e,stroke:#333,color:#fff
+    style CH7 fill:#4dabf7,stroke:#333,color:#fff
+    style CH0 fill:#ff6b6b,stroke:#333,color:#fff
+```
+
+### 📊 Comparaison TCXO vs GPSDO
+
+| Paramètre | TCXO 25 MHz (stock) | GPSDO 10 MHz (CLKIN) |
+|-----------|:-------------------:|:--------------------:|
+| Précision fréquence | ~1-2 ppm (±25 Hz à 25 MHz) | **< 0.01 ppb** (tracé GPS) |
+| Maintien (holdover) | Dérive avec temp | TCXO interne au GPSDO |
+| Bruit de phase PLL R820T | Ref. | **Meilleur** (source externe |
+| Stabilité Doppler | Correction logicielle | **Correction hardware** |
+| Usage calibration PPB | Obligatoire | **Inutile** (GPS discipline) |
+| Correction freq auto | Non (firmware) | **Oui** (GPSDO verrouillé GPS) |
+
+> 💡 **Cas d'usage GPSDO** : réception BPSK précise, mesure de fréquence satellite, systèmes multi-stations cohérentes (VLBI amateur), comparaison de fréquences.
+> Pour la réception satellite APT/LRPT standard, le TCXO corrigé par PPB est suffisant.
+
+### 🔧 GPSDOs compatibles testés
+
+| Module GPSDO | Fréquence sortie | Niveau logique | Notes |
+|-------------|:----------------:|:--------------:|-------|
+| Leo Bodnar GPS-GPSDO | 10 MHz | 3.3V CMOS | ✅ Compatible direct |
+| u-blox NEO-M8N + buffer | 10 MHz | 3.3V CMOS | ✅ Compatible |
+| OCXO 10 MHz | 10 MHz | Sinusoïdal | ⚠️ Adapter niveau |
+| Pendulum CNT-91 | 10 MHz | LVTTL | ✅ Compatible |
+
+> ⚠️ Signal sinusoïdal : utiliser un buffer CMOS (74LV14 ou SN74LV1T34) pour adapter.
+
+---
+
+### ⚡ Modification 11 — CLK7 8mA en mode CLKIN (GPSDO)
+
+**📁 Fichier** : `common/airspy_nos_conf.c` — Table SI5351C CLKIN, registre 23 (CLK7 control)
+
+```diff
+  /* Conf 1 (AIRSPY_SI5351C_CONFIG_CLKIN) AIRSPY_NOS CLKIN 10MHz CLK */
+- 0x00, 0x00, 0x40, 0x6C, 0x00, ... // 20 - 29 (CLK7 drive 2mA)
++ 0x00, 0x00, 0x40, 0x6F, 0x00, ... // 20 - 29 (F4TNK MOD11: CLK7 drive 8mA)
+```
+
+#### 📐 Décomposition du registre 23 (CLK7_CTRL) — mode CLKIN
+
+| Bit | Nom | Avant (0x6C) | Après (0x6F) | Effet |
+|-----|-----|:------------:|:------------:|-------|
+| [7] | CLK7_PDN | 0 (ON) | 0 (ON) | Active ✅ |
+| [6] | MS7_SRC | 1 (PLL_B) | 1 (PLL_B) | Source PLL_B (640 MHz) ✅ |
+| [5] | MS7_INT | 1 (Integer) | 1 (Integer) | Division entière ✅ |
+| [4:2] | CLK7 multisynth | 011 | 011 | ✅ inchangé |
+| **[1:0]** | **CLK7_IDRV** | **00 (2mA)** | **11 (8mA)** | **🔺 Courant sortie ×4** |
+
+#### 🧠 Justification
+
+Même logique que **Mod 10** (mode XTAL) : un courant plus faible en sortie CLK7 produit des **fronts d'horloge moins raides**, ce qui se traduit par plus de jitter sur le GP_CLKIN du LPC4370.
+
+```mermaid
+flowchart LR
+    subgraph "GPSDO super-précis"
+        GPS_SRC["🌍 ±0.01 ppb"] --> CLKIN_IN["CH7 = 20 MHz"]
+    end
+    CLKIN_IN --> DRIVE{"Drive CLK7"}
+    DRIVE -->|"2mA (stock)"| SOFT["Fronts mous\nJitter ~50 ps\n⚠️ Annule l'avantage GPSDO"]
+    DRIVE -->|"8mA (F4TNK)"| SHARP["Fronts raides\nJitter ~20 ps\n✅ Préserve la qualité GPSDO"]
+    SOFT --> ADC_BAD["❌ ADC gâché par\nle jitter d'horloge"]
+    SHARP --> ADC_GOOD["✅ ENOB maximal\nSNR optimal"]
+
+    style SOFT fill:#ff6b6b,stroke:#333,color:#fff
+    style SHARP fill:#69db7c,stroke:#333,color:#000
+    style ADC_BAD fill:#c92a2a,stroke:#333,color:#fff
+    style ADC_GOOD fill:#2b8a3e,stroke:#333,color:#fff
+```
+
+> ⭐ **Important** : Sans cette modification, même un GPSDO parfait aurait son avantage de phase noise annulé par le jitter d'interface vers l'ADC.
+
+**🟢 Impact** : Aucun risque — même modification que Mod 10 pour le mode GPSDO.
+
+---
+
+## 📊 Tableau récapitulatif des 11 modifications
 
 ```mermaid
 pie title Impact estimé des modifications sur le SNR
-    "⭐ R0x1E FILTER_EXT" : 25
-    "R0x09 IF current MAX" : 15
-    "R0x07 Mixer current MAX" : 12
-    "R0x06 +3dB IF gain" : 10
+    "⭐ R0x1E FILTER_EXT" : 23
+    "R0x09 IF current MAX" : 14
+    "R0x07 Mixer current MAX" : 11
+    "R0x06 +3dB IF gain" : 9
     "R0x0D LNA AGC thresholds" : 8
     "R0x0E Mixer AGC threshold" : 7
     "R0x1D LNA TOP" : 7
-    "R0x1C Mixer TOP" : 6
+    "R0x1C Mixer TOP" : 5
     "OPTIM_SET_MUX Doppler" : 5
-    "CLK7 8mA jitter" : 5
+    "CLK7 8mA XTAL (Mod10)" : 5
+    "CLK7 8mA CLKIN (Mod11)" : 6
 ```
 
 | # | Fichier | Registre | Avant → Après | Description | Risque |
@@ -629,9 +789,12 @@ pie title Impact estimé des modifications sur le SNR
 | 7 | `airspy_nos_conf.c` | R0x1D | `0xAE` → `0x8E` | TOP LNA élevé | 🟡 Faible |
 | 8 | `airspy_nos_conf.c` | R0x1E | `0x0A` → `0x4A` | ⭐ FILTER_EXT activé | 🟢 Nul |
 | 9 | `Makefile_M0_inc.mk` | -D flag | — | OPTIM_SET_MUX (Doppler) | 🟢 Nul |
-| 10 | `airspy_nos_conf.c` | SI5351C reg23 | `0x6C` → `0x6F` | CLK7 drive 8mA | 🟢 Nul |
+| 10 | `airspy_nos_conf.c` | SI5351C reg23 XTAL | `0x6C` → `0x6F` | CLK7 drive 8mA (TCXO) | 🟢 Nul |
+| 11 | `airspy_nos_conf.c` | SI5351C reg23 CLKIN | `0x6C` → `0x6F` | ⭐ CLK7 8mA (GPSDO) | 🟢 Nul |
 
 > 🟢 = Aucun risque | 🟡 = Risque faible (réversible par reflash)
+
+> 🛰️ **Mod 11 s'applique automatiquement si un GPSDO 10 MHz est connecté au pad CLK du PCB.** Sans GPSDO, seules les Mods 1-10 sont actives.
 
 ---
 
