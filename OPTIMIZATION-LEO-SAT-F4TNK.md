@@ -919,7 +919,7 @@ flowchart TD
     Q1 -->|"✅ Oui"| NORMAL["📌 Récupération normale"]
     Q1 -->|"❌ Non"| DFU["🆘 Récupération DFU"]
 
-    NORMAL --> CMD1["$ airspy_spiflash -w airspy_m0_m4.bin"]
+    NORMAL --> CMD1["$ airspy_spiflash -w airspy_rom_to_ram/airspy_rom_to_ram.bin"]
     CMD1 --> DONE["✅ Firmware restauré !"]
 
     DFU --> STEP1["1️⃣ Ouvrir le boîtier<br/>(4 vis)"]
@@ -927,7 +927,7 @@ flowchart TD
     STEP2 --> STEP3["3️⃣ Brancher USB"]
     STEP3 --> STEP4["4️⃣ $ dfu-util -d 1fc9:000c<br/>-D firmware.bin"]
     STEP4 --> STEP5["5️⃣ Jumper P5 →<br/>position 2-3"]
-    STEP5 --> STEP6["6️⃣ $ airspy_spiflash -w<br/>airspy_m0_m4.bin"]
+    STEP5 --> STEP6["6️⃣ $ airspy_spiflash -w<br/>airspy_rom_to_ram/airspy_rom_to_ram.bin"]
     STEP6 --> DONE
 
     style DONE fill:#2b8a3e,stroke:#333,color:#fff
@@ -946,13 +946,14 @@ flowchart TD
 
 ```bash
 # 1. Récupération normale (Airspy reconnu en USB)
-airspy_spiflash -w airspy_m0_m4.bin
+airspy_spiflash -w ~/dev/airspyone_firmware/airspy_rom_to_ram/airspy_rom_to_ram.bin
 
 # 2. Récupération DFU (Airspy non reconnu — jumper P5 en 1-2)
-dfu-util -d 1fc9:000c -a 0 -D airspy_m0_m4.bin
+dfu-util -d 1fc9:000c -a 0 -D ~/dev/airspyone_firmware/airspy_rom_to_ram/airspy_rom_to_ram.bin
 
 # 3. Vérification après récupération
 airspy_info
+# → Firmware Version: AirSpy NOS <git-tag> <date>
 ```
 
 ---
@@ -1002,19 +1003,50 @@ Nos modifications réduisent $NF_{Mixer}$, $NF_{IF}$ et augmentent $G_{LNA}$, $G
 
 ### 🏗️ Compilation et flash
 
+#### Prérequis (Debian Trixie / Ubuntu 24+)
+
 ```bash
-# 1. Installer le toolchain ARM
-sudo apt install gcc-arm-none-eabi
+# Toolchain ARM + outils Python/git
+sudo apt install gcc-arm-none-eabi python3-git xxd airspy
 
-# 2. Compiler le firmware
+# Debian Trixie n'a pas 'python', seulement python3
+sudo ln -sf /usr/bin/python3 /usr/local/bin/python
+```
+
+> ⚠️ **GCC 14 + LTO** : Le firmware contient un correctif pour la double définition de `set_freq_params_t`  
+> (supprimée de `airspy_m0.c`, gardée dans `airspy_usb_req.c`). Sans ce fix, GCC 14 refuse de linker.
+
+#### Compilation
+
+```bash
 cd ~/dev/airspyone_firmware
+
+# 1. Compiler libopencm3 (obligatoire — fournit les .ld et .a)
+cd libopencm3
+make TARGETS="lpc43xx/m0 lpc43xx/m0s lpc43xx/m4"
+cd ..
+
+# 2. Compiler le firmware F4TNK
 make
+# → Produit : airspy_rom_to_ram/airspy_rom_to_ram.bin
+```
 
-# 3. Flasher (mode normal — Airspy reconnu en USB)
-airspy_spiflash -w airspy_m0_m4.bin
+#### Flash (mode normal — Airspy reconnu en USB)
 
-# 4. Vérifier
+```bash
+# Arrêter tout process qui monopolise l'Airspy (ex: Docker)
+cd ~/station-3762 && docker compose down
+
+# Flasher
+airspy_spiflash -w ~/dev/airspyone_firmware/airspy_rom_to_ram/airspy_rom_to_ram.bin
+
+# Power-cycle physique (débrancher/rebrancher USB)
+# Puis vérifier — la version doit afficher le tag git F4TNK
 airspy_info
+# → Firmware Version: AirSpy NOS <git-tag> <date>
+
+# Relancer Docker
+cd ~/station-3762 && docker compose up -d
 ```
 
 ---
@@ -1023,4 +1055,4 @@ airspy_info
 >
 > 🔒 *Toutes les modifications sont réversibles via `airspy_spiflash -w` ou récupération DFU (jumper P5)*
 >
-> 🗓️ *Dernière mise à jour : Février 2026*
+> 🗓️ *Dernière mise à jour : 17 Février 2026 — Firmware compilé et flashé avec GCC 14.2 (Debian Trixie)*
