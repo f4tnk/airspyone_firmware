@@ -76,12 +76,6 @@ const char version_string[] = " " AIRSPY_FW_GIT_TAG " " AIRSPY_FW_CHECKIN_DATE;
 
 typedef struct {
   uint32_t freq_hz;
-} set_freq_params_t;
-
-set_freq_params_t set_freq_params;
-
-typedef struct {
-  uint32_t freq_hz;
   uint32_t divider;
 } set_sample_r_params_t;
 
