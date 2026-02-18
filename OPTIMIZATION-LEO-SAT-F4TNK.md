@@ -33,8 +33,10 @@
   - [⚡ Mod 10 — CLK7 drive 8mA (SI5351C)](#-modification-10--clk7-drive-8ma-si5351c)
 - [�️ GPSDO — Référence externe 10 MHz](#-gpsdo--référence-externe-10-mhz)
   - [⚡ Mod 11 — CLK7 8mA en mode CLKIN](#-modification-11--clk7-8ma-en-mode-clkin-gpsdo)
-- [📊 Tableau récapitulatif des 11 modifications](#-tableau-récapitulatif-des-11-modifications)
+  - [⚡ Mod 12 — CLK0 8mA (SI5351C → R820T XTAL)](#-modification-12--clk0-8ma-si5351c--r820t-xtal)
+- [📊 Tableau récapitulatif des 12 modifications](#-tableau-récapitulatif-des-12-modifications)
 - [🔬 Analyse ADC / DMA / Horloge](#-analyse-adc--dma--horloge)
+- [⚖️ Comparatif HydraSDR RFOne vs Airspy R2 F4TNK](#-comparatif-hydrasdr-rfone-vs-airspy-r2-f4tnk)
 - [🧪 Configuration recommandée pour LEO](#-configuration-recommandée-pour-leo)
 - [🆘 Procédure de récupération DFU](#-procédure-de-récupération-dfu)
 - [📚 Annexe — Carte des registres R820T2](#-annexe--carte-des-registres-r820t2)
@@ -858,6 +860,112 @@ pie title Impact estimé des modifications sur le SNR
 > 🛰️ **Mod 11 s'applique automatiquement si un GPSDO 10 MHz est connecté au pad CLK du PCB.** Sans GPSDO, seules les Mods 1-10 + 12 sont actives.
 
 > 📡 **Mod 12** améliore la qualité de l'oscillateur local du R820T2 dans les **deux modes** (TCXO et GPSDO) — c'est le seul registre SI5351C qui pilote directement la broche XTAL du tuner.
+
+---
+
+## ⚖️ Comparatif HydraSDR RFOne vs Airspy R2 F4TNK
+
+> **HydraSDR RFOne** est le successeur de l’Airspy R2 par Benjamin Vernoux (même auteur). Il partage le MCU LPC4370 et le SI5351C mais utilise le tuner **R828D** (3 ports RF) au lieu du R820T2 (1 port). Son firmware est disponible dans `rfone_fw/`.
+
+### 🛠️ Matériel comparé
+
+| Composant | Airspy R2 | HydraSDR RFOne |
+|-----------|:---------:|:--------------:|
+| MCU | LPC4370 | LPC4370 (idem) |
+| Tuner | R820T2 | R828D (registres I2C compatibles) |
+| Synth. d’horloges | SI5351C | SI5351C (idem) |
+| Ports RF | 1 (RP-SMA) | **3 ports** (RX0 / RX1 / RX2) |
+| Contrôle alim. tuner | Non | GPIO ON/OFF r82x |
+| Sample rates | 10 / 2.5 MSPS | 10 / 5 / 2.5 + ALT 12 / 8 / 6 / 4.096 MSPS |
+| PACKING timestamp | Non | **Oui** (mode=2: frame counter + ADC status) |
+
+### 🏆 Registres R82X : F4TNK est plus optimisé que HydraSDR
+
+HydraSDR utilise les valeurs **stock** du R828D (équivalent R820T2). Toutes les optimisations F4TNK sont absentes de son firmware :
+
+| Mod F4TNK | Registre | F4TNK (Airspy R2) | HydraSDR RFOne (stock) |
+|-----------|----------|:-----------------:|:----------------------:|
+| **Mod 1** — FILT\_GAIN +3 dB | R0x06 | `0xA0` ✅ | `0x80` ❌ |
+| **Mod 2** — Mixer current MAX | R0x07 | `0x40` ✅ | `0x60` ❌ |
+| **Mod 3** — IF filter current MAX | R0x09 | `0x00` ✅ | `0x40` ❌ |
+| **Mod 4** — AGC LNA seuils relevés | R0x0D | `0x75` ✅ | `0x63` ❌ |
+| **Mod 5** — AGC mixer seuil relevé | R0x0E | `0x85` ✅ | `0x75` ❌ |
+| **Mod 6** — MIXER\_TOP élevé | R0x1C | `0x24` ✅ | `0x54` ❌ |
+| **Mod 7** — LNA\_TOP élevé | R0x1D | `0x8E` ✅ | `0xAE` ❌ |
+| **Mod 8** — FILTER\_EXT | R0x1E | `0x4A` ✅ | `0x0A` ❌ |
+| **Mod 9** — OPTIM\_SET\_MUX | Makefile | activé ✅ | non compilé ❌ |
+| **Mods 10–11** — CLK7 8mA | SI5351C reg23 | `0x6F` ✅ | `0x6C` ❌ |
+| **Mod 12** — CLK0 8mA | SI5351C reg16 | `0x03`/`0x4F` ✅ | `0x00`/`0x4C` ❌ |
+
+### 🆕 Ce que HydraSDR apporte de nouveau
+
+#### 1️⃣ `PACKING_TIMESTAMP_ON` (mode=2) — frame counter USB
+
+Dans le DMA ISR du M4 (`rfone_fw/m4/m4.c`) :
+
+```c
+if(use_packing == HYDRASDR_PACKING_TIMESTAMP_ON)
+{
+    uint32_t* hdr = (uint32_t*)(usb_bulk_buffer + ofs);
+    hdr[0] = framecounter | (ads << 16);  /* frame n° [15:0] + ADC status [31:16] */
+    framecounter++;
+    /* pack 12-bit data après les 4 octets de header */
+}
+```
+
+- Le DMA saute 4 octets au début de chaque bloc USB pour laisser la place au header
+- Côté host : détection de perte de paquets USB (discontinuité du compteur)
+- L’Airspy R2 ne supporte que `PACKING_OFF`(0) et `PACKING_ON`(1)
+- **Portabilité** : faisable sur Airspy R2, mais nécessite de modifier aussi `libairspy`
+- **Intérêt SatNOGS** : faible (les overruns USB sont journalisés autrement)
+
+#### 2️⃣ Sample rates additionnels via `PLL0AUDIO`
+
+HydraSDR supporte **4 taux ALT** via le PLL0AUDIO fractionnel du LPC4370 :
+
+| Rate | PLL0AUDIO MDEC | NDEC | Bande passante IQ | Spurs |
+|:----:|:-------------:|:----:|:-----------------:|:-----:|
+| **12 MSPS** | `0x000003FF` | `0x0000000E` | 12 MHz | −90 dBFS |
+| 8 MSPS | `0x0000003F` | `0x0000000E` | 8 MHz | −90 dBFS |
+| 6 MSPS | `0x0000007F` | `0x00000018` | 6 MHz | −80 dBFS |
+| 4.096 MSPS | `0x00004924` | `0x0003F006` | 4 MHz | −80 dBFS |
+
+- **12 MSPS** est potentiellement intéressant pour le **HRPT L-band** (Meteor-M2, NOAA-15/18/19 : signal ≈1 MHz mais benéficie d’une bande plus large pour le filtrage numérique)
+- **Risque** : le LPC4370 ADCHS est limité à 80 MHz d’entrée PLL0AUDIO, les diviseurs doivent être recalculés, et 12 MSPS × 4 octets = 48 MB/s approche la limite USB 2.0 HS sustainé
+- Le 10 MSPS existant (**sans PLL0AUDIO** — GP\_CLKIN direct) est **optimal en rapport qualité/risque**
+
+### 🎯 Conclusion : rien à porter sans risque
+
+```mermaid
+quadrantChart
+    title Analyse port HydraSDR → Airspy R2 F4TNK
+    x-axis Faible valeur SatNOGS --> Haute valeur SatNOGS
+    y-axis Risque élevé --> Risque zéro
+    quadrant-1 Porter sans hésiter
+    quadrant-2 À évaluer
+    quadrant-3 À éviter
+    quadrant-4 Idéal mais risqué
+    PACKING_TIMESTAMP (framecounter): [0.20, 0.55]
+    3 RF ports (hw absent): [0.15, 0.10]
+    GPIO power R82X: [0.25, 0.40]
+    12 MSPS PLL0AUDIO: [0.65, 0.35]
+    r820t_calibrate (déjà présent): [0.50, 0.90]
+    OPTIM_SET_MUX (Mod9 actif): [0.80, 0.95]
+    CLK0 CLK7 8mA (Mods 10-12): [0.85, 0.92]
+```
+
+| Fonctionnalité HydraSDR | Portabilité Airspy R2 | Risque | Intérêt SatNOGS |
+|--------------------------|:---------------------:|:------:|:---------------:|
+| 3 ports RF | ❌ Hardware absent | — | — |
+| GPIO ON/OFF tuner | ❌ Hardware absent | — | — |
+| `r82x_calibrate()` | ✅ **Déjà présent** dans r820t.c | — | — |
+| OPTIM\_SET\_MUX | ✅ **Déjà activé** (Mod 9) | — | — |
+| Config SI5351C | ✅ Identique | — | — |
+| PACKING\_TIMESTAMP | ⚠️ Faisable (mod firmware+host) | 🟡 Bas | 🟡 Moyen |
+| **12 MSPS PLL0AUDIO** | ⚠️ Complexe (recalcul diviseurs) | 🟠 Moyen | 🟢 Bon |
+| Registres R82X optimisés | ⭐ **F4TNK est meilleur** | — | — |
+
+> 📌 **Le firmware F4TNK est plus optimisé que le HydraSDR RFOne officiel** sur tous les aspects RF (registres R820T2, drive SI5351C CLK0 + CLK7). HydraSDR vise la polyvalence (multi-antennes, multi-rates) ; F4TNK vise la sensibilité maximale pour signaux LEO faibles.
 
 ---
 
