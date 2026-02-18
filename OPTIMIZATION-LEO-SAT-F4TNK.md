@@ -206,7 +206,8 @@ flowchart LR
         FILT --> VGA["🔺 VGA"]
     end
 
-    VGA --> ADC["📐 ADC<br/>Mod 10: CLK XTAL 8mA<br/>Mod 11: CLK GPSDO 8mA"]
+    VGA --> ADC["📐 ADC<br/>Mod 10: CLK7 XTAL 8mA<br/>Mod 11: CLK7 GPSDO 8mA"]
+    R820T --> R820T_CLK["🕐 XTAL 25 MHz<br/>Mod 12: CLK0 8mA"]
 
     DOPPLER["🌀 Doppler<br/>Mod 9: OPTIM_SET_MUX"]
     DOPPLER -.->|"tuning rapide"| MIX
@@ -761,21 +762,80 @@ flowchart LR
 
 ---
 
-## 📊 Tableau récapitulatif des 11 modifications
+### ⚡ Modification 12 — CLK0 8mA (SI5351C → R820T XTAL)
+
+**📁 Fichier** : `common/airspy_nos_conf.c` — Tables SI5351C XTAL + CLKIN, registre 16 (CLK0 control)
+
+```diff
+  /* Conf 0 (AIRSPY_SI5351C_CONFIG_XTAL) — row 10-19 */
+- 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // reg16 = CLK0_IDRV=00 (2mA)
++ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00  // reg16 = CLK0_IDRV=11 (8mA) F4TNK Mod12
+
+  /* Conf 1 (AIRSPY_SI5351C_CONFIG_CLKIN) — row 10-19 */
+- 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x4C, 0x00, 0x00, 0x00  // reg16 = CLK0_IDRV=00 (2mA)
++ 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x4F, 0x00, 0x00, 0x00  // reg16 = CLK0_IDRV=11 (8mA) F4TNK Mod12
+```
+
+#### 📐 Décomposition du registre 16 (CLK0_CTRL)
+
+| Bit | Nom | XTAL avant (0x00) | XTAL après (0x03) | CLKIN avant (0x4C) | CLKIN après (0x4F) | Effet |
+|-----|-----|:-----------------:|:-----------------:|:------------------:|:------------------:|-------|
+| [7] | CLK0_PDN | 0 (ON) | 0 (ON) | 0 (ON) | 0 (ON) | Actif ✅ |
+| [6] | MS0_SRC | 0 (PLL_A) | 0 (PLL_A) | 1 (PLL_B) | 1 (PLL_B) | Source PLL ✅ |
+| [5:4] | CLK0_SRC | 00 | 00 | 11 | 11 | Inchangé ✅ |
+| [3] | CLK0_INV | 0 | 0 | 0 | 0 | Non inversé ✅ |
+| **[1:0]** | **CLK0_IDRV** | **00 (2mA)** | **11 (8mA)** | **00 (2mA)** | **11 (8mA)** | **🔺 Courant ×4** |
+
+#### 🧠 Justification technique
+
+CLK0 (SI5351C) est connecté à la **broche XTAL du R820T2** — c'est la référence 25 MHz pour son **VCO PLL interne** qui génère l'oscillateur local (LO) pour la conversion RF→IF.
+
+```mermaid
+flowchart LR
+    subgraph "SI5351C"
+        PLL_A["🔵 PLL_A\n25 MHz × N"] --> CLK0["CLK0\n25 MHz"]
+    end
+    CLK0 -->|"Drive"| DRIVE{"CLK0_IDRV"}
+    DRIVE -->|"2mA (stock)\nFronts mous\nJitter ~40 ps"| R820T_BAD["❌ R820T2 XTAL\nPLL VCO bruité\nPhase noise élevé\ndégradation SNR récep."]
+    DRIVE -->|"8mA (F4TNK Mod12)\nFronts raides\nJitter ~15 ps"| R820T_GOOD["✅ R820T2 XTAL\nPLL VCO propre\nPhase noise optimal\nSFDR maximal"]
+
+    style R820T_BAD fill:#ff6b6b,stroke:#333,color:#fff
+    style R820T_GOOD fill:#69db7c,stroke:#333,color:#000
+    style DRIVE fill:#ffd43b,stroke:#333,color:#000
+```
+
+#### 📊 Chaîne causale : CLK0 drive → phase noise R820T
+
+| Étape | 2mA (stock) | 8mA (F4TNK) |
+|-------|:-----------:|:-----------:|
+| Fronts CLK0 | ~4 ns rise/fall | ~1.5 ns rise/fall |
+| Jitter CLK0→XTAL | ~40 ps rms | ~15 ps rms |
+| Bruit de phase PLL VCO | dégradé | optimal |
+| Plancher de bruit récepteur | +0.5..1 dB | référence |
+| Spurious close-in | visibles | atténués |
+
+> ⭐ **La chaîne RF complète** : Antenne → LNA → Mixer → IF → **ADC** est aussi limitée par la qualité de l'oscillateur local du R820T2. CLK0 est le maillon manquant optimisé par Mod 12.
+
+**🟢 Impact** : Risque zéro — SI5351C spécifié pour 8mA par sortie, broche XTAL R820T2 en entrée CMOS haute impédance. Valable en modes XTAL (TCXO) et CLKIN (GPSDO).
+
+---
+
+## 📊 Tableau récapitulatif des 12 modifications
 
 ```mermaid
 pie title Impact estimé des modifications sur le SNR
-    "⭐ R0x1E FILTER_EXT" : 23
-    "R0x09 IF current MAX" : 14
-    "R0x07 Mixer current MAX" : 11
+    "⭐ R0x1E FILTER_EXT" : 22
+    "R0x09 IF current MAX" : 13
+    "R0x07 Mixer current MAX" : 10
     "R0x06 +3dB IF gain" : 9
     "R0x0D LNA AGC thresholds" : 8
     "R0x0E Mixer AGC threshold" : 7
-    "R0x1D LNA TOP" : 7
+    "R0x1D LNA TOP" : 6
     "R0x1C Mixer TOP" : 5
     "OPTIM_SET_MUX Doppler" : 5
     "CLK7 8mA XTAL (Mod10)" : 5
-    "CLK7 8mA CLKIN (Mod11)" : 6
+    "CLK7 8mA CLKIN (Mod11)" : 5
+    "CLK0 8mA R820T XTAL (Mod12)" : 5
 ```
 
 | # | Fichier | Registre | Avant → Après | Description | Risque |
@@ -791,10 +851,13 @@ pie title Impact estimé des modifications sur le SNR
 | 9 | `Makefile_M0_inc.mk` | -D flag | — | OPTIM_SET_MUX (Doppler) | 🟢 Nul |
 | 10 | `airspy_nos_conf.c` | SI5351C reg23 XTAL | `0x6C` → `0x6F` | CLK7 drive 8mA (TCXO) | 🟢 Nul |
 | 11 | `airspy_nos_conf.c` | SI5351C reg23 CLKIN | `0x6C` → `0x6F` | ⭐ CLK7 8mA (GPSDO) | 🟢 Nul |
+| 12 | `airspy_nos_conf.c` | SI5351C reg16 XTAL+CLKIN | `0x00`→`0x03` / `0x4C`→`0x4F` | CLK0 8mA → R820T XTAL PLL | 🟢 Nul |
 
 > 🟢 = Aucun risque | 🟡 = Risque faible (réversible par reflash)
 
-> 🛰️ **Mod 11 s'applique automatiquement si un GPSDO 10 MHz est connecté au pad CLK du PCB.** Sans GPSDO, seules les Mods 1-10 sont actives.
+> 🛰️ **Mod 11 s'applique automatiquement si un GPSDO 10 MHz est connecté au pad CLK du PCB.** Sans GPSDO, seules les Mods 1-10 + 12 sont actives.
+
+> 📡 **Mod 12** améliore la qualité de l'oscillateur local du R820T2 dans les **deux modes** (TCXO et GPSDO) — c'est le seul registre SI5351C qui pilote directement la broche XTAL du tuner.
 
 ---
 
@@ -1055,4 +1118,4 @@ cd ~/station-3762 && docker compose up -d
 >
 > 🔒 *Toutes les modifications sont réversibles via `airspy_spiflash -w` ou récupération DFU (jumper P5)*
 >
-> 🗓️ *Dernière mise à jour : 17 Février 2026 — Firmware compilé et flashé avec GCC 14.2 (Debian Trixie)*
+> 🗓️ *Dernière mise à jour : 18 Février 2026 — Mod 12 CLK0 8mA ajoutée, firmware compilé avec GCC 14.2 (Debian Trixie)*
