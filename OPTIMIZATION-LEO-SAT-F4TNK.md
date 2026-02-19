@@ -1222,8 +1222,86 @@ cd ~/station-3762 && docker compose up -d
 
 ---
 
+## 📡 Configuration SatNOGS optimisée — `station.env`
+
+L'analyse ci-dessous justifie chaque valeur de la configuration F4TNK de production.
+
+### Chaîne de gain complète R820T2 → ADC LPC4370
+
+```
+Antenne → Filtre passe-bande → [LNA R820T2] → [Mixer R820T2] → [Filtre IF] → [VGA] → ADC 12 bits
+                                  ↑                ↑              ↑             ↑
+                            LNA=12 (manuel)    MIX=5      FILT_GAIN=+3dB   VGA=8
+                            Mod4: AGC↑         PW0_MIX=0  (firmware)     (compensé)
+```
+
+### Tableau de bilan de gain vs configuration stock
+
+| Étage | Code stock | Code F4TNK | Delta | Actif en Settings Field |
+|-------|-----------|-----------|-------|------------------------|
+| **FILT_GAIN** firmware (R0x06) | 0 dB | **+3 dB** | +3 dB | ✅ Toujours |
+| **PW0_MIX** courant mixer (R0x07) | normal | MAX | NF −2/3 dB | ✅ Toujours |
+| **PW1_IFFILT** courant filtre IF (R0x09) | normal | MAX | NF −1 dB | ✅ Toujours |
+| **FILTER_EXT** (R0x1E) | off | on | Extension IF | ✅ Toujours |
+| **LNA_VTH** seuils AGC (R0x0D) | VTHH=6, VTHL=3 | VTHH=7, VTHL=5 | AGC plus tard | ⚠️ AGC LNA seulement |
+| **MIX_VTH** AGC mixer (R0x0E) | VTHH=7 | VTHH=8 | AGC plus tard | ⚠️ AGC mixer seulement |
+| **MIXER_TOP** (R0x1C) | TOP=5 | TOP=2 | Headroom mixer | ⚠️ AGC seulement |
+| **LNA_TOP** (R0x1D) | TOP=5 | TOP=1 | Headroom LNA | ⚠️ AGC seulement |
+| **LNA** SoapyAirspy (`LNA=12`) | 10 | 12 | +4~5 dB | ✅ Manual |
+| **MIX** SoapyAirspy (`MIX=5`) | 4 | 5 | +3~4 dB | ✅ Manual |
+| **VGA** SoapyAirspy (`VGA=8`) | 10 | 8 | −7 dB | ✅ Manual |
+| **Net chaîne** | 0 dB | **≈ +1 dB** | compensation quasi-neutre | — |
+
+> **Clé architecturale** : FILT_GAIN (+3 dB) intervient **avant** le VGA dans la chaîne de Friis.
+> Moins de bruit amplifié par le VGA → meilleur NF effectif malgré un gain total quasi identique.
+
+### Pourquoi `Settings Field` et pas `sensitivity_gain` ?
+
+Les tables `sensitivity_gain` et `linearity_gain` de libairspy ont été calibrées pour le **firmware stock** (sans FILT_GAIN). Exemple :
+
+```
+sensitivity_gain index 0 (max) : LNA=14, MIX=12, VGA=13
+```
+
+Avec FILT_GAIN +3 dB actif en firmware, ce combo provoquerait une **saturation ADC quasi certaine** sur signaux LEO moyens (−100 à −110 dBm). Le mode `Settings Field` donne le contrôle total pour caller manuellement les gains après compensation FILT_GAIN.
+
+### Equivalence dans la table sensitivity_gain
+
+La config `LNA=12, MIX=5, VGA=8` correspond approximativement à `sensitivity_gain ≈ 6~7` en firmware stock — mais avec +3 dB de FILT_GAIN actif en plus, ce qui donne une sensibilité effective proche de `sensitivity_gain ≈ 3~4` stock.
+
+### Rationale `SATNOGS_RX_SAMP_RATE=10000000`
+
+Confirmé par l'analyse de `airspy_nos_conf.c` :
+
+| Taux | IDIVB | PLL0AUDIO | Qualité horloge |
+|------|-------|-----------|----------------|
+| **10 MSPS** (Conf 0) | **0** (= direct GP_CLKIN) | bypassé | ✅ Gigue minimale |
+| 6 MSPS | 0 | actif (DirectI) | ⚠️ Gigue PLL |
+| 2.5 MSPS | **3** (÷4) | actif | ❌ Gigue PLL + diviseur |
+
+À 10 MSPS, le GP_CLKIN (20 MHz, SI5351C CLK7) va **directement** à l'ADC haute vitesse du LPC4370 — chemin d'horloge le plus propre. Passe à 2.5 MSPS active IDIVB=3 → gigue de phase → plancher de bruit ADC relevé.
+
+`bitpacking=true` : 2×12 bits → 3 bytes = **15 MB/s USB2 HS OK** (sans packing : 20 MB/s → saturation bus).
+
+### Mods dormants en `Settings Field`
+
+Les mods LNA_TOP, MIXER_TOP, VTHH/VTHL sont actifs **uniquement** quand l'AGC R820T est activé (mode auto). En `Settings Field` (`0x05 = 0x90` → bits LNA manual), le LNA est piloté directement par code SoapyAirspy et l'AGC R820T est bypassé.
+
+Pour exploiter ces mods, il faudrait recalibrer les tables libairspy en tenant compte du FILT_GAIN +3 dB — ou implémenter un mode hybride (LNA auto AGC, MIX/VGA manual) dans SoapyAirspy.
+
+### Configuration `station.env` de production
+
+```dotenv
+SATNOGS_GAIN_MODE=Settings Field
+SATNOGS_OTHER_SETTINGS=VGA=8,MIX=5,LNA=12
+SATNOGS_RX_SAMP_RATE=10000000
+SATNOGS_DEV_ARGS=bitpacking=true
+```
+
+---
+
 > 📝 *Document créé par F4TNK — Analyse approfondie du firmware Airspy R2 pour optimisation satellite LEO*
 >
 > 🔒 *Toutes les modifications sont réversibles via `airspy_spiflash -w` ou récupération DFU (jumper P5)*
 >
-> 🗓️ *Dernière mise à jour : 18 Février 2026 — Mod 12 CLK0 8mA ajoutée, firmware compilé avec GCC 14.2 (Debian Trixie)*
+> 🗓️ *Dernière mise à jour : 19 Février 2026 — Analyse chaîne de gain + justification Settings Field ajoutée*
