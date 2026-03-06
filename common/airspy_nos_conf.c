@@ -197,7 +197,7 @@ airspy_nos_conf_t __attribute__ ((section(".nocopy_data"))) airspy_nos_conf =
       /* airspy_m0_conf_t airspy_m0_conf */
       {
         1250000, // Freq 5MHz => 2.5MHz IQ => IF Freq = 1.25MHz (r820t_if_freq)
-        0, // uint8_t r820t_bw;
+        8, // F4TNK Mod14: LEO narrow IF BW (was 0). uint8_t r820t_bw;
         0, // uint8_t padding0;
         0 // uint16_t padding1;
       }

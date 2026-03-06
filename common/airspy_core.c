@@ -477,7 +477,14 @@ void sys_clock_init(void)
     si5351c_init_fanout();
     si5351c_power_down_all_clocks();
     si5351c_init_xtal();
-    si5351c_read[0] = si5351c_read_single(0);
+    
+    /* F4TNK: WAIT for GPSDO / CLKIN to stabilize before reading LOS flag.
+       The Si5351C takes a few milliseconds to detect and clear the LOS_CLKIN bit 
+       after initial power up. */
+    delay(WAIT_CPU_CLOCK_INIT_DELAY * 10);
+
+    si5351c_read[0] = si5351c_read_single(0); // clear sticky bit
+    delay(100);
 
     /* Configure and enable SI5351C clocks */
     si5351c_read[1] = (si5351c_read_single(0) & SI5351C_REG0_CLKIN_LOS);

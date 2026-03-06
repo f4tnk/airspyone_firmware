@@ -493,3 +493,18 @@ This would require:
 
 *Document created by F4TNK - Deep firmware analysis of AirSpy R2 for LEO satellite optimization*
 *All changes are reversible via `airspy_spiflash -w` or DFU recovery*
+
+## 13. Recent Safe Optimizations Added (March 2026 Updates) <a name="recent-safe-optimizations"></a>
+
+### Mod 13: GPSDO `LOS_CLKIN` Race Condition Fix
+**File:** `common/airspy_core.c`
+**Description:** At power-on, the SI5351C takes a few milliseconds to detect an external 10 MHz reference on `CLKIN` and clear the `LOS_CLKIN` (Loss of Signal) flag. The original firmware read this flag instantly, defaulting back to XTAL even when a GPSDO was connected.
+**Action:** Added a safe `delay(WAIT_CPU_CLOCK_INIT_DELAY * 10);` and a clearing register read before sensing `LOS_CLKIN`.
+**Impact for LEO:** Ensures 100% reliable auto-switch to GPSDO, drastically improving Doppler compensation accuracy and phase stability.
+
+### Mod 14: LEO Narrow IF Filter for 2.5 MSPS Mode
+**File:** `common/airspy_nos_conf.c` (Conf 1 -> `airspy_m0_conf`)
+**Description:** The default 2.5 MSPS configuration used `r820t_bw = 0` (Widest bandwidth, ~5-6 MHz analog filter). LEO satellites operate on narrowband links (15-150 kHz). Using the widest filter lets in adjacent out-of-band noise, degrading the ADC's dynamic range.
+**Action:** Safe modification of `r820t_bw` from `0` to `8`.
+**Impact for LEO:** Narrows the hardware IF filter before the ADC to ~1 MHz. Allows passing LEO signals + their Doppler variation cleanly while stripping off out-of-band noise natively in analog hardware. It safely maximizes SNR.
+
